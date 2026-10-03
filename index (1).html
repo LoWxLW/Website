@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoWx | Last War Alliance</title>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#14170f;--panel:#1d2216;--line:#363d29;--text:#e6e8dc;--mute:#9aa388;--accent:#d9a521;--bad:#d4604a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 Inter,system-ui,sans-serif}
+h1,h2,h3,nav a,button{font-family:'Chakra Petch',Inter,sans-serif}
+header{border-bottom:2px solid var(--accent);background:var(--panel)}
+.wrap{max-width:900px;margin:0 auto;padding:0 16px}
+.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:14px 0}
+.logo{font:700 2rem 'Chakra Petch';letter-spacing:.04em}.logo small{display:block;font:400 .8rem Inter;color:var(--mute);letter-spacing:0}
+nav a{color:var(--text);text-decoration:none;margin-right:16px;padding:4px 0;border-bottom:2px solid transparent}
+nav a.on,nav a:hover{border-color:var(--accent)}
+main{padding:24px 0 60px}
+h2{font-size:1.5rem;margin:0 0 14px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);padding:12px 16px;margin-bottom:12px}
+.card h3{margin:0 0 4px}.meta{color:var(--mute);font-size:.85rem}
+table{width:100%;border-collapse:collapse;display:block;overflow-x:auto}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mute);font-weight:500}
+input,select,textarea{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);padding:8px;font:inherit;margin:4px 0 10px}
+button{background:var(--accent);color:#1a1500;border:0;padding:8px 16px;font-weight:700;cursor:pointer}
+button.alt{background:none;color:var(--text);border:1px solid var(--line);padding:4px 10px;font-weight:500}
+button.del{color:var(--bad);border-color:var(--bad)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.msg{color:var(--bad)}.empty{color:var(--mute)}
+.box{max-width:360px}
+</style>
+</head>
+<body>
+<header><div class="wrap top">
+  <div class="logo">LoWx<small>Last War alliance · led by Glory88</small></div>
+  <nav id="nav"><a href="#home">Home</a><a href="#events">Events</a><a href="#members">Roster</a><a href="#admin" id="adm">Admin</a></nav>
+</div></header>
+<main class="wrap" id="app"></main>
+
+<script>
+/* 1. Paste your Supabase values here (Project Settings > API). The anon key is safe to publish. */
+const SUPABASE_URL = "PASTE_PROJECT_URL";
+const SUPABASE_ANON_KEY = "PASTE_ANON_KEY";
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const LEVEL = {pending:0, member:1, r4:2, r5:3};
+const app = document.getElementById('app');
+let me = null; // {id, username, role}
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* Editable sections: who may change them and which fields they have */
+const LABELS = {ends_on:'End date (optional, hidden from Home after this day)', when_text:'when'};
+const today = () => new Date().toLocaleDateString('en-CA');
+const SECTIONS = {
+  announcements:{label:'Announcements', min:2, fields:['title','body','ends_on']},
+  events:{label:'Events', min:2, fields:['title','when_text','description']},
+  members:{label:'Roster', min:2, fields:['name','rank','power','notes']}
+};
+
+async function load(table){
+  const {data, error} = await sb.from(table).select('*').order('created_at', {ascending: table!=='announcements'});
+  if (error) return null;
+  return data;
+}
+
+const annCard = r => {
+  const ended = r.ends_on && r.ends_on < today();
+  return `<div class="card"><h3>${esc(r.title)}</h3><div>${esc(r.body)}</div><div class="meta">${new Date(r.created_at).toLocaleDateString()}` +
+    (r.ends_on ? ` · ${ended ? 'Ended' : 'Runs until'} ${esc(r.ends_on)}` : '') + '</div></div>';
+};
+async function home(){
+  const {data} = await sb.from('announcements').select('*')
+    .or('ends_on.is.null,ends_on.gte.' + today()).order('created_at', {ascending:false}).limit(5);
+  app.innerHTML = `<h2>Welcome to LoWx</h2>
+    <p>We are a Last War alliance built on teamwork, daily activity and coordinated wars. Want to join? Message Glory88 in game.</p>
+    <h2>Announcements</h2>` + (data && data.length ? data.map(annCard).join('') : '<p class="empty">No current announcements.</p>') +
+    '<p><a href="#archive" style="color:var(--accent)">View all past announcements</a></p>';
+}
+async function archive(){
+  const PAGE = 20; let from = 0;
+  app.innerHTML = '<h2>All announcements</h2><div id="list"></div><p><button id="more" class="alt">Load more</button></p><p><a href="#home" style="color:var(--accent)">Back to home</a></p>';
+  const more = async () => {
+    const {data} = await sb.from('announcements').select('*').order('created_at', {ascending:false}).range(from, from + PAGE - 1);
+    if (!data) return;
+    list.insertAdjacentHTML('beforeend', data.map(annCard).join(''));
+    from += PAGE;
+    if (data.length < PAGE) document.getElementById('more').remove();
+    if (!list.children.length) list.innerHTML = '<p class="empty">No announcements yet.</p>';
+  };
+  document.getElementById('more').onclick = more; more();
+}
+async function events(){
+  const rows = await load('events');
+  app.innerHTML = '<h2>Events</h2>' + (rows && rows.length ? rows.map(r =>
+    `<div class="card"><h3>${esc(r.title)}</h3><div class="meta">${esc(r.when_text)}</div><div>${esc(r.description)}</div></div>`).join('')
+    : '<p class="empty">No events scheduled.</p>');
+}
+async function roster(){
+  const rows = await load('members');
+  app.innerHTML = '<h2>Roster</h2>' + (rows && rows.length ? `<table><tr><th>Name</th><th>Rank</th><th>Power</th><th>Notes</th></tr>` +
+    rows.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.rank)}</td><td>${esc(r.power)}</td><td>${esc(r.notes)}</td></tr>`).join('') + '</table>'
+    : '<p class="empty">No members listed yet.</p>');
+}
+
+function loginView(msg=''){
+  app.innerHTML = `<div class="box"><h2>Admin login</h2>
+    <label>Email<input id="em" type="email" autocomplete="email"></label>
+    <label>Password<input id="pw" type="password" autocomplete="current-password"></label>
+    <button id="in">Sign in</button> <button class="alt" id="reg">Create account</button>
+    <p class="msg" id="m">${esc(msg)}</p>
+    <p class="meta">New accounts have no rights until an R4 or R5 approves them.</p></div>`;
+  const creds = () => ({email: em.value.trim(), password: pw.value});
+  document.getElementById('in').onclick = async () => {
+    const {error} = await sb.auth.signInWithPassword(creds());
+    if (error) m.textContent = error.message; else route();
+  };
+  document.getElementById('reg').onclick = async () => {
+    const username = prompt('Choose a username (your in-game name):');
+    if (!username) return;
+    const {error} = await sb.auth.signUp({...creds(), options:{data:{username}}});
+    m.textContent = error ? error.message : 'Account created. Check your email if confirmation is required, then sign in.';
+  };
+}
+
+async function getMe(){
+  const {data:{user}} = await sb.auth.getUser();
+  if (!user) return me = null;
+  const {data} = await sb.from('profiles').select('*').eq('id', user.id).single();
+  return me = data;
+}
+
+async function admin(tab){
+  await getMe();
+  if (!me) return loginView();
+  const lvl = LEVEL[me.role];
+  const tabs = Object.entries(SECTIONS).filter(([,s]) => lvl >= s.min).map(([k,s]) => [k, s.label]);
+  if (lvl >= 2) tabs.push(['users','Users & roles']);
+  tab = tab || (tabs[0] && tabs[0][0]);
+  let html = `<h2>Admin</h2><p class="meta">Signed in as ${esc(me.username)} (${me.role}) <button class="alt" id="pwchg">Change password</button> <button class="alt" id="out">Sign out</button></p>`;
+  if (!tab) {
+    app.innerHTML = html + '<p>Your account is waiting for approval. Ask Glory88 to assign your role.</p>';
+    return bindOut();
+  }
+  html += '<div class="tabs">' + tabs.map(([k,l]) => `<button class="${k===tab?'':'alt'}" data-tab="${k}">${l}</button>`).join('') + '</div><div id="pane"></div>';
+  app.innerHTML = html; bindOut();
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => admin(b.dataset.tab));
+  tab === 'users' ? usersPane() : sectionPane(tab);
+}
+function bindOut(){
+  document.getElementById('pwchg').onclick = async () => {
+    const p = prompt('New password (min 8 characters):'); if (!p) return;
+    if (p.length < 8) return alert('Password is too short');
+    const {error} = await sb.auth.updateUser({password: p});
+    alert(error ? error.message : 'Password changed');
+  }; document.getElementById('out').onclick = async () => { await sb.auth.signOut(); me = null; route(); }; }
+
+async function sectionPane(t){
+  const s = SECTIONS[t], rows = await load(t) || [];
+  pane.innerHTML = `<div class="card"><h3>Add to ${s.label}</h3>` +
+    s.fields.map(f => `<label>${LABELS[f] || f}<input data-f="${f}" type="${f==='ends_on'?'date':'text'}"></label>`).join('') +
+    `<button id="add">Add</button><p class="msg" id="m"></p></div>` +
+    rows.map(r => {
+      const locked = t==='members' && me.role==='r4' && ['R4','R5'].includes(String(r.rank||'').trim().toUpperCase());
+      return `<div class="card"><b>${esc(r[s.fields[0]])}</b> <span class="meta">${s.fields.slice(1).map(f => esc(r[f])).join(' | ')}</span>` + (locked ? '' :
+      `<br><button class="alt" data-edit="${r.id}">Edit</button> <button class="alt del" data-del="${r.id}">Delete</button>`) + '</div>'; }).join('');
+  document.getElementById('add').onclick = async () => {
+    const row = {}; pane.querySelectorAll('[data-f]').forEach(i => row[i.dataset.f] = (i.dataset.f==='ends_on' && !i.value) ? null : i.value);
+    const {error} = await sb.from(t).insert(row);
+    error ? m.textContent = error.message : admin(t);
+  };
+  pane.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete this entry?')) return;
+    const {error} = await sb.from(t).delete().eq('id', b.dataset.del);
+    error ? alert(error.message) : admin(t);
+  });
+  pane.querySelectorAll('[data-edit]').forEach(b => b.onclick = async () => {
+    const r = rows.find(x => String(x.id) === b.dataset.edit), upd = {};
+    for (const f of s.fields) {
+      let v = prompt(f === 'ends_on' ? 'End date as YYYY-MM-DD (leave blank for none)' : f, r[f] ?? ''); if (v === null) return;
+      if (f === 'ends_on') { v = v.trim(); if (v && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return alert('Use the format YYYY-MM-DD'); v = v || null; }
+      upd[f] = v; }
+    const {error} = await sb.from(t).update(upd).eq('id', r.id);
+    error ? alert(error.message) : admin(t);
+  });
+}
+
+async function usersPane(){
+  const {data:rows} = await sb.from('profiles').select('*').order('created_at');
+  const top = me.role === 'r5';
+  const canEdit = u => u.id !== me.id && (top || LEVEL[u.role] < LEVEL[me.role]);
+  const roles = Object.keys(LEVEL).filter(r => top || LEVEL[r] < LEVEL[me.role]);
+  const addForm = `<div class="card"><h3>Add account</h3>
+    <label>Email<input id="nu-email" type="email"></label>
+    <label>Username (in-game name)<input id="nu-name"></label>
+    <label>Temporary password (min 8 characters)<input id="nu-pw" type="text"></label>
+    <label>Role<select id="nu-role">${Object.keys(LEVEL).map(r => `<option ${r==='member'?'selected':''}>${r}</option>`).join('')}</select></label>
+    <button id="nu-add">Create account</button><p class="msg" id="nu-msg"></p>
+    <p class="meta">Send them the email and temporary password. They can change it under "Change password".</p></div>`;
+  pane.innerHTML = (top ? addForm : '') + `<table><tr><th>Username</th><th>Role</th><th></th></tr>` + rows.map(u => `<tr><td>${esc(u.username)}</td>
+    <td>${canEdit(u) ? `<select data-role="${u.id}">${roles.map(r => `<option ${r===u.role?'selected':''}>${r}</option>`).join('')}</select>` : u.role}</td>
+    <td>${canEdit(u) ? `<button class="alt del" data-rm="${u.id}">Remove</button>` : ''}</td></tr>`).join('') + '</table>' +
+    `<p class="meta">New sign-ups appear here as "pending". Set a role to approve them. pending/member = no admin rights · r4 = announcements, events, lower-ranked roster entries, and users below r4 · r5 = full control.</p>`;
+  if (top) document.getElementById('nu-add').onclick = async () => {
+    const msg = document.getElementById('nu-msg'); msg.textContent = 'Creating...';
+    const v = id => document.getElementById(id).value.trim();
+    const {data, error} = await sb.functions.invoke('create-user', {body:{email:v('nu-email'), username:v('nu-name'), password:document.getElementById('nu-pw').value, role:v('nu-role')}});
+    if (error || (data && data.error)) {
+      let m = (data && data.error) || error.message;
+      try { const b = await error.context.json(); m = b.error || m; } catch(e) {}
+      msg.textContent = m; return;
+    }
+    usersPane();
+  };
+  pane.querySelectorAll('[data-role]').forEach(s => s.onchange = async () => {
+    const {error} = await sb.from('profiles').update({role: s.value}).eq('id', s.dataset.role);
+    error ? alert(error.message) : usersPane();
+  });
+  pane.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+    if (!confirm('Remove this user? They lose all access.')) return;
+    const {error} = await sb.from('profiles').delete().eq('id', b.dataset.rm);
+    error ? alert(error.message) : usersPane();
+  });
+}
+
+function route(){
+  const h = (location.hash || '#home').slice(1);
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + h));
+  ({home, archive, events, members: roster, admin: () => admin()}[h] || home)();
+}
+addEventListener('hashchange', route);
+if (SUPABASE_URL.startsWith('PASTE')) app.innerHTML = '<p class="msg">Set SUPABASE_URL and SUPABASE_ANON_KEY in index.html first (see README).</p>';
+else route();
+</script>
+</body>
+</html>
